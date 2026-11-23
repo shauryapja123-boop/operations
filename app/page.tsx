@@ -3,6 +3,16 @@ import Image from "next/image";
 import { ArrowRight, ClipboardList, Monitor, ShieldCheck, Wrench } from "lucide-react";
 
 export default function Home() {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const supabaseEnabled = Boolean(
+    supabaseUrl &&
+    supabaseKey &&
+    !supabaseUrl.includes("YOUR_PROJECT") &&
+    !supabaseKey.includes("YOUR_SUPABASE")
+  );
+  const demoMode = !supabaseEnabled && process.env.NODE_ENV !== "production";
+
   return (
     <main className="portal-page">
       <div className="portal-glow portal-glow-one" />
@@ -57,7 +67,11 @@ export default function Home() {
             <span className="portal-card-arrow"><ArrowRight size={18} /></span>
           </Link>
         </div>
-        <div className="portal-foot"><ShieldCheck size={14} /> Demo mode — no account or server setup required</div>
+        <div className="portal-foot"><ShieldCheck size={14} /> {supabaseEnabled
+          ? "Sign in with your Supabase Auth account"
+          : demoMode
+            ? "Demo mode — no account or server setup required"
+            : "Supabase configuration is required for this deployment"}</div>
       </section>
       <aside className="portal-aside">
         <div className="portal-aside-mark"><Image src="/btw-logo.png" alt="BTW" width={110} height={85} /></div>

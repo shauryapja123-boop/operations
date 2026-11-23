@@ -11,6 +11,7 @@ The interface uses the BTW Operations name and supplied BTW logo with a warm cre
 - New issue submission flow and ticket detail/status interaction (local demo state).
 - IT and Maintenance queue views.
 - In-app alerts for the selected department team and Admin when a manager raises an issue.
+- Shared tickets and real-time notifications through Supabase when Supabase Auth is configured.
 - Admin tools for renaming outlets and managing demo manager accounts.
 - Resolution controls for IT and Maintenance teams, with resolved state visible to managers and admins.
 - Resolution date and time is recorded and displayed in each relevant issue view.
@@ -18,9 +19,11 @@ The interface uses the BTW Operations name and supplied BTW logo with a warm cre
 - Row Level Security (RLS) policies for restaurant managers, department teams and administrators.
 - Ticket numbering, SLA deadline calculation and audit logging triggers.
 
-## Important implementation status
+## Authentication and storage modes
 
-The sign-in pages use **local demo logins**. Admin, IT and Maintenance demo roles accept any email and password. Managers can choose an outlet until an Admin provisions the first manager account; after that, managers must use an account configured in Admin → Outlet Settings. Manager password hashes, outlet names, roles and demo issues are stored in browser local storage. This is not real authentication: local browser data can be changed or bypassed and is not shared with other devices. Do not use it to protect production data.
+When Supabase environment variables are configured, sign-in uses Supabase Auth, profiles determine each user's role and outlet/department, and tickets and notifications are stored in the shared Supabase database. Row Level Security controls which tickets each account can read or update.
+
+Without Supabase configuration, local development uses the browser-only demo mode. Demo issues, roles, outlets and accounts stay in that browser and are not shared across devices. A production deployment without Supabase configuration blocks sign-in rather than silently using local demo data.
 
 ## Requirements
 
@@ -40,13 +43,13 @@ Open http://localhost:3000 and choose a role:
 - Maintenance team: `/login/maintenance` — see maintenance issues from all outlets, assign them and update status.
 - Admin: `/login/admin` — see all issues across all outlets and both departments.
 
-No Supabase project or environment variables are needed for this demo. Initially, any valid email and non-empty password works on the sign-in pages. After the Admin creates manager accounts, restaurant managers must use those accounts instead. The first three outlet names are examples from the starter; `Outlet 04` through `Outlet 24` are placeholders to replace with your actual outlet names. Since this is only browser storage, each team can see changes only when using the same browser on the same device.
+No Supabase project or environment variables are needed to try the local demo. In demo mode, any valid email and non-empty password works on the sign-in pages. The first three outlet names are examples from the starter; `Outlet 04` through `Outlet 24` are placeholders to replace with your actual outlet names.
 
-Admins can open **Outlet Settings** in the dashboard to assign unique outlet names, create manager accounts, and reset manager passwords. Passwords are hashed with PBKDF2 before being stored, but these browser-local demo accounts are not production authentication.
+In demo mode, Admin can open **Outlet Settings** to edit outlet names and manage browser-local manager accounts. Those settings are not used in Supabase mode.
 
 ## Demo in-app notifications
 
-When a manager submits an issue, the selected department team and Admin receive an unread notification in the dashboard bell. IT receives IT issues; Maintenance receives Maintenance issues. Notifications can be marked read individually or all at once and sync across tabs in the same browser. Like the demo issues, notification history is stored only in browser local storage and is not delivered to other devices or users' browsers. Production notifications require authenticated server-side ticket creation and a shared backend; see the production integration plan below.
+When Supabase is configured, a database trigger creates an unread notification for active Admin and matching department accounts whenever a manager submits a ticket. Notifications and ticket changes are delivered to signed-in dashboards through Supabase Realtime. In demo mode, alerts remain in browser local storage and only sync across tabs in that browser.
 
 ## Demo WhatsApp alerts for Maintenance
 
@@ -58,35 +61,43 @@ The demo can send a WhatsApp template message to configured maintenance team mem
 
 The access token and recipient list are read only by the server; never use `NEXT_PUBLIC_` for these settings. The demo login and tickets are not authenticated or stored on a server, so this endpoint is intentionally demo-only and can be called without a verified manager account. Do not enable it on a public or production deployment. For production, first connect real Supabase Auth and server-side ticket creation, then trigger WhatsApp only from that authenticated ticket workflow.
 
-## Optional Supabase setup for future integration
+## Set up shared Supabase data
 
-The current login and dashboard do not connect to Supabase. When you're ready to add real authentication and persistent tickets:
+1. Create a Supabase project and open its **SQL Editor**.
+2. Run `supabase/schema.sql`, then run `supabase/shared-data-migration.sql`.
+3. In **Project Settings → API**, copy the project URL and public anon/publishable key. Do not use the service-role key in the browser.
+4. Add `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` to `.env.local` for local development and to Vercel's environment variables for every deployment environment. Redeploy after changing Vercel variables.
+5. In **Authentication → Users**, create a user for each manager, IT/Maintenance team member, and Admin. Add a matching row in `public.profiles` for each Auth user's UUID. The profile's role and restaurant/department assignment determine what they can see.
 
-1. Create a Supabase project.
-2. Open **SQL Editor** and run `supabase/schema.sql`.
-3. In **Authentication → Users**, create your administrator account.
-4. Add a `profiles` row for that user's UUID, with `role='admin'`, `full_name`, and `email`.
-5. Create a restaurant manager Auth user and a matching profile row with `restaurant_id` set and role `restaurant_manager`.
-6. Set the environment variables in `.env.local`.
-7. Create a **private** Storage bucket named `ticket-attachments`. Add Storage RLS policies before enabling uploads.
+Example profile inserts (replace the UUID, name, email and outlet code with real values):
 
-The SQL schema includes restaurant manager, department executive/head and admin roles. The current demo logins are separate browser-only roles and are not connected to those profiles.
+```sql
+-- Admin
+insert into public.profiles(id, full_name, email, role)
+values ('AUTH_USER_UUID', 'Operations Admin', 'admin@example.com', 'admin');
 
-## Production integration plan
+-- Manager assigned to an existing restaurant
+insert into public.profiles(id, full_name, email, role, restaurant_id)
+select 'AUTH_USER_UUID', 'Outlet Manager', 'manager@example.com', 'restaurant_manager', id
+from public.restaurants where code = 'NOI-018';
 
-### Authentication
-The current local demo login is only for previewing the four role-specific dashboards. It stores a role in browser local storage and can be bypassed by a user; it provides no authentication or authorization. The issue register is shared only within the same browser and device. Before production, use real sign-in accounts, store issues in a shared database, verify roles and outlet assignment on the server, protect routes, and enforce authorization at the database.
+-- IT team member; use 'Maintenance' for the Maintenance team
+insert into public.profiles(id, full_name, email, role, department)
+values ('AUTH_USER_UUID', 'IT Team Member', 'it@example.com', 'department_head', 'IT');
+```
 
-### Ticket CRUD
-Replace the sample issue data in `lib/demo-issues.ts` with Supabase queries. On insert, set `reporter_id` from the authenticated session and `restaurant_id` from the signed-in manager's profile, not from arbitrary client input. Use a server action or authenticated API route for state transitions.
+In Supabase mode, create and assign manager accounts in Supabase Auth and `public.profiles`; the browser-only **Outlet Settings** manager form is available only in demo mode. Existing issues saved in a browser's local storage are not automatically imported into Supabase.
+
+The app only needs the public anon/publishable key in `NEXT_PUBLIC_` variables. Keep any Supabase service-role key server-side and out of client code.
+
+## Remaining production setup
+
+The ticket and notification flow uses Supabase Auth, Postgres, RLS and Realtime. Attachments are not implemented yet; before enabling them, create a **private** Storage bucket named `ticket-attachments` and add Storage RLS policies. Configure email delivery and scheduled SLA escalation separately using a trusted server/Edge Function.
 
 ### Department workflow
-- Department executive: see tickets for their department; accept/assign tickets and update progress.
-- Department head: department-wide queue, assignment and escalation.
-- Restaurant manager: create and view tickets for their restaurant; confirm or reject resolution.
-- Admin: manage users, restaurants, SLA policies and cross-location reports.
-
-Add server-side transition validation. For example, only the assigned department may move a ticket to `in_progress`; a manager may close a resolved ticket or reopen it with a reason.
+- Department executive/head: see their department's tickets, enter an assignee name and update status.
+- Restaurant manager: create tickets for their assigned restaurant and track their status.
+- Admin: see tickets across restaurants and departments. Create Auth users and assign profiles in Supabase.
 
 ### SLA and escalation
 The schema calculates response and resolution deadlines at ticket creation using `sla_policies`. For a reliable production scheduler:
@@ -96,8 +107,8 @@ The schema calculates response and resolution deadlines at ticket creation using
 4. Make the job idempotent so the same breach does not send duplicate emails.
 5. Define business hours, holidays, pause rules for `on_hold`, and escalation recipients with operations before launch. The starter SLA values are calendar minutes, not business-hours calculations.
 
-### Email and in-app notifications
-Use an Edge Function or server-side worker with a provider such as Resend. Store notification events in `notifications`; subscribe to Supabase Realtime for in-app updates. Send email from trusted server-side code only. Configure SMTP/domain authentication and delivery logs.
+### Email notifications
+In-app notifications are created by the database trigger and delivered through Supabase Realtime. Email delivery and scheduled SLA escalation are not implemented; add them through a trusted server/Edge Function and configure SMTP/domain authentication and delivery logs.
 
 ### Reporting
 Use SQL views or server-side aggregate queries for:
@@ -123,4 +134,4 @@ Do not expose internal comments to restaurant managers; enforce `is_internal` fi
 
 ## Suggested next build milestone
 
-Wire Supabase Auth and real ticket CRUD first. Then implement comments/attachments, email + realtime notifications, scheduled escalation, and finally management reports.
+Implement private ticket attachments, then email/SLA escalation and operational reporting.

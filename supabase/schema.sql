@@ -204,12 +204,27 @@ create policy "read permitted tickets" on public.tickets for select to authentic
 using (public.can_access_ticket(restaurant_id, department));
 create policy "manager creates own restaurant tickets" on public.tickets for insert to authenticated
 with check (
-  reporter_id=auth.uid() and exists(select 1 from public.profiles p
-    where p.id=auth.uid() and p.role='restaurant_manager' and p.restaurant_id=restaurant_id)
+  reporter_id=auth.uid()
+  and status='new'
+  and assignee_id is null
+  and first_response_at is null
+  and resolved_at is null
+  and closed_at is null
+  and escalation_level=0
+  and escalated_at is null
+  and exists(select 1 from public.profiles p
+    where p.id=auth.uid() and p.is_active=true and p.role='restaurant_manager'
+      and p.restaurant_id=public.tickets.restaurant_id)
 );
 create policy "department and admin update tickets" on public.tickets for update to authenticated
-using (public.can_access_ticket(restaurant_id, department))
-with check (public.can_access_ticket(restaurant_id, department));
+using (exists(select 1 from public.profiles p
+  where p.id=auth.uid() and p.is_active=true and (
+    p.role='admin' or (p.role in ('department_executive','department_head') and p.department=public.tickets.department)
+  )))
+with check (exists(select 1 from public.profiles p
+  where p.id=auth.uid() and p.is_active=true and (
+    p.role='admin' or (p.role in ('department_executive','department_head') and p.department=public.tickets.department)
+  )));
 
 create policy "read comments on accessible tickets" on public.ticket_comments for select to authenticated
 using (exists(select 1 from public.tickets t where t.id=ticket_id and public.can_access_ticket(t.restaurant_id,t.department)));

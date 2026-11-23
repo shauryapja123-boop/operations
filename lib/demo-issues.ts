@@ -6,7 +6,9 @@ export type IssuePriority = "Critical" | "High" | "Medium" | "Low";
 
 export interface DemoIssue {
   id: string;
+  databaseId?: string;
   title: string;
+  description?: string;
   location: string;
   department: IssueDepartment;
   category: string;
@@ -34,7 +36,9 @@ function isDemoIssue(value: unknown, outlets: string[]): value is DemoIssue {
   if (typeof value !== "object" || value === null) return false;
   const issue = value as Record<string, unknown>;
   return typeof issue.id === "string" &&
+    (issue.databaseId === undefined || typeof issue.databaseId === "string") &&
     typeof issue.title === "string" &&
+    (issue.description === undefined || typeof issue.description === "string") &&
     typeof issue.location === "string" &&
     outlets.includes(issue.location) &&
     (issue.department === "IT" || issue.department === "Maintenance") &&

@@ -9,6 +9,8 @@ import {
   authenticateDemoManager, DEMO_OUTLETS, readDemoManagerAccounts, readDemoOutlets,
   saveDemoSession, type DemoManagerAccount, type DemoRole
 } from "@/lib/demo-auth";
+import { fetchSupabaseProfile, getDemoRole, isSupabaseConfigured } from "@/lib/supabase/auth";
+import { createClient } from "@/lib/supabase/client";
 
 const roleDetails = {
   restaurant_manager: {
@@ -51,6 +53,8 @@ export default function LoginForm({ role }: { role: DemoRole }) {
   const router = useRouter();
   const details = roleDetails[role];
   const Icon = details.icon;
+  const supabaseEnabled = isSupabaseConfigured();
+  const demoMode = !supabaseEnabled && process.env.NODE_ENV !== "production";
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [outlet, setOutlet] = useState(DEMO_OUTLETS[0]);
@@ -61,7 +65,7 @@ export default function LoginForm({ role }: { role: DemoRole }) {
   const [pending, setPending] = useState(false);
 
   useEffect(() => {
-    if (role !== "restaurant_manager") return;
+    if (role !== "restaurant_manager" || !demoMode) return;
     try {
       const savedOutlets = readDemoOutlets();
       setOutlets(savedOutlets);
@@ -71,7 +75,7 @@ export default function LoginForm({ role }: { role: DemoRole }) {
       console.error("Could not load demo manager settings.", loadError);
       setError("Could not load manager settings from this browser.");
     }
-  }, [role]);
+  }, [role, demoMode]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -79,6 +83,26 @@ export default function LoginForm({ role }: { role: DemoRole }) {
 
     try {
       setPending(true);
+      if (!supabaseEnabled && process.env.NODE_ENV === "production") {
+        throw new Error("Supabase is not configured for this deployment. Add the public Supabase URL and anon key in Vercel.");
+      }
+      if (supabaseEnabled) {
+        const supabase = createClient();
+        const { data, error: authError } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+        if (authError) throw new Error(authError.message);
+        if (!data.user) throw new Error("Supabase did not return a signed-in user.");
+
+        try {
+          const profile = await fetchSupabaseProfile(data.user.id);
+          if (!getDemoRole(profile)) throw new Error("Your account is missing a valid department assignment.");
+        } catch (profileError) {
+          await supabase.auth.signOut();
+          throw profileError;
+        }
+        router.replace("/dashboard");
+        return;
+      }
+
       let managerOutlet = outlet;
       if (role === "restaurant_manager") {
         const manager = await authenticateDemoManager(email, password, outlet);
@@ -91,8 +115,8 @@ export default function LoginForm({ role }: { role: DemoRole }) {
       saveDemoSession({ role, email, ...(role === "restaurant_manager" ? { outlet: managerOutlet } : {}) });
       router.replace("/dashboard");
     } catch (loginError) {
-      console.error("Could not sign in to the demo workspace.", loginError);
-      setError("Could not save your demo session. Check that browser storage is enabled and try again.");
+      console.error("Could not sign in to the workspace.", loginError);
+      setError(loginError instanceof Error ? loginError.message : "Could not sign in. Please try again.");
     } finally {
       setPending(false);
     }
@@ -124,7 +148,7 @@ export default function LoginForm({ role }: { role: DemoRole }) {
               type="email"
               value={email}
             />
-            {role === "restaurant_manager" && (
+            {role === "restaurant_manager" && demoMode && (
               managerAccounts.length === 0 ? (
                 <>
                   <label className="login-outlet-label" htmlFor="manager-outlet">Your outlet</label>
@@ -174,7 +198,11 @@ export default function LoginForm({ role }: { role: DemoRole }) {
             </button>
           </form>
 
-          <div className="login-help">{role === "restaurant_manager"
+          <div className="login-help">{supabaseEnabled
+            ? "Sign in with the account created for you by your administrator."
+            : process.env.NODE_ENV === "production"
+              ? "Supabase authentication must be configured before this deployment can accept sign-ins."
+              : role === "restaurant_manager"
             ? managerAccounts.length > 0
               ? "Use the manager account and password created by your administrator in this browser."
               : "Demo sign-in: enter any email and password. Admin can configure manager accounts."
@@ -182,7 +210,7 @@ export default function LoginForm({ role }: { role: DemoRole }) {
           <div className="login-switch">Choose a different role? <Link href="/">Back to role selection</Link></div>
         </div>
 
-        <div className="login-footer"><ShieldCheck size={14} /> Demo only — this sign-in does not secure or verify an account</div>
+        <div className="login-footer"><ShieldCheck size={14} /> {supabaseEnabled ? "Protected by Supabase authentication" : "Demo only — this sign-in does not secure or verify an account"}</div>
       </section>
       <aside className="login-aside">
         <div className="login-aside-content">

@@ -17,14 +17,27 @@ import { INITIAL_ISSUES, readDemoIssues, saveDemoIssues, type DemoIssue, type Is
 import {
   createDemoNotification, readDemoNotifications, saveDemoNotifications, type DemoNotification
 } from "@/lib/demo-notifications";
+import {
+  createSupabaseIssue, fetchSupabaseIssues, fetchSupabaseNotifications,
+  markSupabaseNotificationsRead, updateSupabaseIssue
+} from "@/lib/supabase/operations";
+import { isSupabaseConfigured } from "@/lib/supabase/auth";
+import { createClient } from "@/lib/supabase/client";
 
 const statusClass: Record<IssueStatus,string> = {
   "New":"new", "Assigned":"assigned", "In Progress":"progress", "On Hold":"hold", "Resolved":"resolved", "Reopened":"reopened", "Closed":"closed"
 };
 const priorityClass: Record<DemoIssue["priority"],string> = { Critical:"critical", High:"high", Medium:"medium", Low:"low" };
 
-export default function DashboardClient({ role, email, outlet }: { role: DemoRole; email: string; outlet?: string }) {
+export default function DashboardClient({ role, email, outlet, userId, restaurantId }: {
+  role: DemoRole;
+  email: string;
+  outlet?: string;
+  userId?: string;
+  restaurantId?: string;
+}) {
   const router = useRouter();
+  const supabaseMode = isSupabaseConfigured();
   const [issues,setIssues] = useState<DemoIssue[]>([]);
   const [issuesLoaded,setIssuesLoaded] = useState(false);
   const [notifications,setNotifications] = useState<DemoNotification[]>([]);
@@ -69,6 +82,16 @@ export default function DashboardClient({ role, email, outlet }: { role: DemoRol
   const overdueCount=2;
 
   useEffect(() => {
+    if (supabaseMode) {
+      void fetchSupabaseIssues()
+        .then(setIssues)
+        .catch(error => {
+          console.error("Could not load Supabase issues.", error);
+          showNotice(error instanceof Error ? error.message : "Could not load issues.", true);
+        })
+        .finally(() => setIssuesLoaded(true));
+      return;
+    }
     try {
       setIssues(readDemoIssues());
     } catch (error) {
@@ -79,9 +102,30 @@ export default function DashboardClient({ role, email, outlet }: { role: DemoRol
     } finally {
       setIssuesLoaded(true);
     }
-  }, []);
+  }, [supabaseMode]);
 
   useEffect(() => {
+    if (supabaseMode) {
+      if (role === "restaurant_manager") {
+        setNotifications([]);
+        setNotificationsLoaded(true);
+        return;
+      }
+      if (!userId) {
+        setNotice("Your Supabase user session is missing. Please sign in again.");
+        setNoticeError(true);
+        setNotificationsLoaded(true);
+        return;
+      }
+      void fetchSupabaseNotifications(userId, role, notificationReader)
+        .then(setNotifications)
+        .catch(error => {
+          console.error("Could not load Supabase notifications.", error);
+          showNotice(error instanceof Error ? error.message : "Could not load notifications.", true);
+        })
+        .finally(() => setNotificationsLoaded(true));
+      return;
+    }
     try {
       setNotifications(readDemoNotifications());
     } catch (error) {
@@ -92,10 +136,10 @@ export default function DashboardClient({ role, email, outlet }: { role: DemoRol
     } finally {
       setNotificationsLoaded(true);
     }
-  }, []);
+  }, [supabaseMode, role, userId, notificationReader]);
 
   useEffect(() => {
-    if (!notificationsLoaded) return;
+    if (supabaseMode || !notificationsLoaded) return;
     try {
       saveDemoNotifications(notifications);
     } catch (error) {
@@ -103,10 +147,10 @@ export default function DashboardClient({ role, email, outlet }: { role: DemoRol
       setNotice("Could not save notifications in this browser.");
       setNoticeError(true);
     }
-  }, [notifications, notificationsLoaded]);
+  }, [notifications, notificationsLoaded, supabaseMode]);
 
   useEffect(() => {
-    if (!issuesLoaded) return;
+    if (supabaseMode || !issuesLoaded) return;
     try {
       saveDemoIssues(issues);
     } catch (error) {
@@ -114,9 +158,10 @@ export default function DashboardClient({ role, email, outlet }: { role: DemoRol
       setNotice("Could not save issues in this browser. Changes may not be available after refresh.");
       setNoticeError(true);
     }
-  }, [issues, issuesLoaded]);
+  }, [issues, issuesLoaded, supabaseMode]);
 
   useEffect(() => {
+    if (supabaseMode) return;
     function syncLocalData(event:StorageEvent) {
       if (event.key === "operations-hub-demo-notifications" && event.newValue !== null) {
         try {
@@ -137,10 +182,42 @@ export default function DashboardClient({ role, email, outlet }: { role: DemoRol
 
     window.addEventListener("storage",syncLocalData);
     return () => window.removeEventListener("storage",syncLocalData);
-  }, []);
+  }, [supabaseMode]);
 
   useEffect(() => {
-    if (role !== "admin") return;
+    if (!supabaseMode || !userId) return;
+    const supabase = createClient();
+    const refreshIssues = () => {
+      void fetchSupabaseIssues()
+        .then(setIssues)
+        .catch(error => {
+          console.error("Could not refresh Supabase issues.", error);
+          showNotice(error instanceof Error ? error.message : "Could not refresh issues.", true);
+        });
+    };
+    const refreshNotifications = () => {
+      if (role === "restaurant_manager") return;
+      void fetchSupabaseNotifications(userId, role, notificationReader)
+        .then(setNotifications)
+        .catch(error => {
+          console.error("Could not refresh Supabase notifications.", error);
+          showNotice(error instanceof Error ? error.message : "Could not refresh notifications.", true);
+        });
+    };
+    const channel = supabase.channel(`dashboard-${userId}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "tickets" }, refreshIssues)
+      .on("postgres_changes", { event: "*", schema: "public", table: "notifications", filter: `user_id=eq.${userId}` }, refreshNotifications)
+      .subscribe(status => {
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+          showNotice("Live updates are unavailable. Reload the page to check for new changes.", true);
+        }
+      });
+
+    return () => { void supabase.removeChannel(channel); };
+  }, [supabaseMode, userId, role, notificationReader]);
+
+  useEffect(() => {
+    if (role !== "admin" || supabaseMode) return;
     try {
       const savedOutlets = readDemoOutlets();
       setOutlets(savedOutlets);
@@ -152,7 +229,7 @@ export default function DashboardClient({ role, email, outlet }: { role: DemoRol
       setNotice("Could not load outlet settings from this browser.");
       setNoticeError(true);
     }
-  }, [role]);
+  }, [role, supabaseMode]);
 
   function handleRenameOutlet(currentName:string) {
     try {
@@ -203,6 +280,31 @@ export default function DashboardClient({ role, email, outlet }: { role: DemoRol
 
   async function createIssue(e:React.FormEvent) {
     e.preventDefault();
+    if (supabaseMode) {
+      if (!userId || !restaurantId || !outlet) {
+        showNotice("Your account is missing its restaurant assignment. Contact an administrator.", true);
+        return;
+      }
+      try {
+        const item = await createSupabaseIssue({
+          userId,
+          restaurantId,
+          issue: form,
+          location: outlet
+        });
+        setIssues(current => [item, ...current]);
+        setShowNew(false);
+        setActive("My Issues");
+        setForm(current => ({ ...current, title: "", description: "" }));
+        showNotice(`Issue submitted — ${item.id}. The assigned team and Admin have been notified.`);
+      } catch (error) {
+        console.error("Could not submit issue to Supabase.", error);
+        showNotice(error instanceof Error ? error.message : "Could not submit the issue.", true);
+      }
+      setTimeout(()=>setNotice(""),5000);
+      return;
+    }
+
     const next = 126 + issues.length - INITIAL_ISSUES.length;
     const item:DemoIssue={...form,id:`OPS-2026-${String(next).padStart(5,"0")}`,location:outlet ?? "Noida Sector 18",reporterEmail:email,status:"New",assignee:"Unassigned",age:"Just now",created:"Just now"};
     setIssues([item,...issues]); setShowNew(false); setActive("My Issues");
@@ -246,7 +348,9 @@ export default function DashboardClient({ role, email, outlet }: { role: DemoRol
     }
     setTimeout(()=>setNotice(""),5000);
   }
-  function updateIssue(id:string,updates:Partial<DemoIssue>) {
+  async function updateIssue(id:string,updates:Partial<DemoIssue>) {
+    const currentIssue = issues.find(issue => issue.id === id);
+    if (!currentIssue) return;
     const updatedIssues=issues.map(issue=>{
       if (issue.id!==id) return issue;
       if (updates.status === undefined || updates.status === issue.status) return {...issue,...updates};
@@ -260,6 +364,17 @@ export default function DashboardClient({ role, email, outlet }: { role: DemoRol
           : null
       };
     });
+    if (supabaseMode) {
+      const updatedIssue = updatedIssues.find(issue => issue.id === id);
+      if (!updatedIssue) return;
+      try {
+        await updateSupabaseIssue(currentIssue, updates);
+      } catch (error) {
+        console.error("Could not update Supabase issue.", error);
+        showNotice(error instanceof Error ? error.message : "Could not update the issue.", true);
+        return;
+      }
+    }
     setIssues(updatedIssues);
     setSelected(current=>current?.id===id ? updatedIssues.find(issue=>issue.id===id) ?? null : current);
     if(updates.status === "Resolved") showNotice(`Issue ${id} marked resolved. Managers and admins can see the update.`);
@@ -289,7 +404,16 @@ export default function DashboardClient({ role, email, outlet }: { role: DemoRol
     }
   }
 
-  function markNotificationRead(notification:DemoNotification) {
+  async function markNotificationRead(notification:DemoNotification) {
+    if (supabaseMode) {
+      try {
+        await markSupabaseNotificationsRead([notification.id]);
+      } catch (error) {
+        console.error("Could not mark the Supabase notification as read.", error);
+        showNotice(error instanceof Error ? error.message : "Could not mark the notification as read.", true);
+        return;
+      }
+    }
     setNotifications(current => current.map(item =>
       item.id === notification.id && !item.readBy.includes(notificationReader)
         ? { ...item, readBy: [...item.readBy, notificationReader] }
@@ -299,8 +423,17 @@ export default function DashboardClient({ role, email, outlet }: { role: DemoRol
     setNotificationsOpen(false);
   }
 
-  function markAllNotificationsRead() {
+  async function markAllNotificationsRead() {
     const unreadIds = new Set(unreadNotifications.map(notification => notification.id));
+    if (supabaseMode) {
+      try {
+        await markSupabaseNotificationsRead([...unreadIds]);
+      } catch (error) {
+        console.error("Could not mark Supabase notifications as read.", error);
+        showNotice(error instanceof Error ? error.message : "Could not mark notifications as read.", true);
+        return;
+      }
+    }
     setNotifications(current => current.map(notification =>
       unreadIds.has(notification.id) && !notification.readBy.includes(notificationReader)
         ? { ...notification, readBy: [...notification.readBy, notificationReader] }
@@ -314,12 +447,14 @@ export default function DashboardClient({ role, email, outlet }: { role: DemoRol
       ? [["Overview",LayoutDashboard],["IT Queue",Monitor]]
       : role === "maintenance_team"
         ? [["Overview",LayoutDashboard],["Maintenance Queue",Wrench]]
-          : [["Overview",LayoutDashboard],["My Issues",ClipboardList],["IT Queue",Monitor],["Maintenance Queue",Wrench],["Outlet Settings",Building2],["Reports & Analytics",Activity]];
+          : supabaseMode
+            ? [["Overview",LayoutDashboard],["My Issues",ClipboardList],["IT Queue",Monitor],["Maintenance Queue",Wrench],["Reports & Analytics",Activity]]
+            : [["Overview",LayoutDashboard],["My Issues",ClipboardList],["IT Queue",Monitor],["Maintenance Queue",Wrench],["Outlet Settings",Building2],["Reports & Analytics",Activity]];
   const roleTitle = role === "restaurant_manager" ? "Outlet Manager" : role === "it_team" ? "IT Team" : role === "maintenance_team" ? "Maintenance Team" : "Administrator";
   const roleInitials = role === "restaurant_manager" ? "RM" : role === "it_team" ? "IT" : role === "maintenance_team" ? "MT" : "AD";
 
   if (!issuesLoaded) {
-    return <main className="login-page"><p className="dashboard-loading">Loading saved issues...</p></main>;
+    return <main className="login-page"><p className="dashboard-loading">Loading issues...</p></main>;
   }
 
   function handleStatusChange(id:string,status:IssueStatus) {
@@ -341,7 +476,7 @@ export default function DashboardClient({ role, email, outlet }: { role: DemoRol
       <div className="sidebar-bottom">
         <div className="help-card"><div className="help-icon"><LifeBuoy size={17}/></div><b>Need assistance?</b><p>Contact your system administrator for access or support.</p><button onClick={()=>showNotice("Support contact: operations administrator")}>Get help <ArrowUpRight size={13}/></button></div>
         <button className="nav-item"><Settings size={18}/>Settings</button>
-        <div className="profile"><div className="avatar">{roleInitials}</div><div className="profile-text"><b>{email}</b><small>{roleTitle}{role === "restaurant_manager" ? ` · ${outlet}` : ""} · Demo</small></div><button className="icon-btn" aria-label="Log out" title="Log out" onClick={()=>{clearDemoSession();router.replace("/")}}><LogOut size={17}/></button></div>
+        <div className="profile"><div className="avatar">{roleInitials}</div><div className="profile-text"><b>{email}</b><small>{roleTitle}{role === "restaurant_manager" ? ` · ${outlet}` : ""}{supabaseMode ? "" : " · Demo"}</small></div><button className="icon-btn" aria-label="Log out" title="Log out" onClick={async()=>{if(supabaseMode){const {error}=await createClient().auth.signOut();if(error){showNotice(`Could not sign out: ${error.message}`,true);return;}}else{clearDemoSession();}router.replace("/")}}><LogOut size={17}/></button></div>
       </div>
     </aside>
 
@@ -366,7 +501,7 @@ export default function DashboardClient({ role, email, outlet }: { role: DemoRol
           </div>
         </>}
 
-        {role === "admin" && active === "Outlet Settings" ? (
+        {role === "admin" && !supabaseMode && active === "Outlet Settings" ? (
           <div className="panel settings-panel">
             <section>
               <div className="panel-head"><div><h3>Outlet names</h3><p>Names must be unique. Existing issues and manager assignments are updated when an outlet is renamed.</p></div></div>
