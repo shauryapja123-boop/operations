@@ -69,6 +69,8 @@ The access token and recipient list are read only by the server; never use `NEXT
 4. Add `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` to `.env.local` for local development and to Vercel's environment variables for every deployment environment. Redeploy after changing Vercel variables.
 5. In **Authentication → Users**, create a user for each manager, IT/Maintenance team member, and Admin. Add a matching row in `public.profiles` for each Auth user's UUID. The profile's role and restaurant/department assignment determine what they can see.
 
+For an existing manager Auth user, open `supabase/create-manager-profile.sql`, replace `manager@example.com`, `Restaurant Manager`, and `NOI-018` with the manager's email, name, and restaurant code, then run the full script in SQL Editor. It checks that both the Auth user and active restaurant exist and refuses to overwrite an existing profile.
+
 Example profile inserts (replace the UUID, name, email and outlet code with real values):
 
 ```sql

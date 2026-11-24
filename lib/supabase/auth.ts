@@ -74,13 +74,26 @@ export async function fetchSupabaseProfile(userId: string): Promise<SupabaseProf
     .maybeSingle();
 
   if (error) throw new Error(`Could not load your account profile: ${error.message}`);
+  if (!data) {
+    throw new Error(
+      "Your login is valid, but no public.profiles row exists for this Auth user. " +
+      "Create the manager profile in Supabase and assign it to the correct restaurant."
+    );
+  }
   const profile = parseSupabaseProfile(data);
   if (!profile) {
-    throw new Error("Your Supabase account is missing a valid profile. Ask an administrator to configure it.");
+    throw new Error(
+      "Your public.profiles row has invalid values. Check that its ID matches the Auth user UUID, " +
+      "role is restaurant_manager, restaurant_id is set, and department is NULL."
+    );
   }
-  if ((profile.role === "restaurant_manager" && (!profile.restaurant_id || !profile.restaurant)) ||
-      ((profile.role === "department_executive" || profile.role === "department_head") && !profile.department)) {
-    throw new Error("Your account profile is missing its restaurant or department assignment.");
+  if (profile.role === "restaurant_manager" && (!profile.restaurant_id || !profile.restaurant)) {
+    throw new Error(
+      "Your manager profile is missing a valid restaurant assignment. Set restaurant_id to an existing restaurant."
+    );
+  }
+  if ((profile.role === "department_executive" || profile.role === "department_head") && !profile.department) {
+    throw new Error("Your team profile is missing its department assignment.");
   }
   return profile;
 }
