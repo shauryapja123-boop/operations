@@ -66,8 +66,9 @@ The access token and recipient list are read only by the server; never use `NEXT
 1. Create a Supabase project and open its **SQL Editor**.
 2. Run `supabase/schema.sql`, then run `supabase/shared-data-migration.sql`.
 3. In **Project Settings → API**, copy the project URL and public anon/publishable key. Do not use the service-role key in the browser.
-4. Add `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` to `.env.local` for local development and to Vercel's environment variables for every deployment environment. Redeploy after changing Vercel variables.
-5. In **Authentication → Users**, create a user for each manager, IT/Maintenance team member, and Admin. Add a matching row in `public.profiles` for each Auth user's UUID. The profile's role and restaurant/department assignment determine what they can see.
+4. Add `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` to `.env.local` for local development and to Vercel's environment variables for every deployment environment.
+5. To let the Admin create manager accounts from **Manager Accounts**, also add `SUPABASE_SERVICE_ROLE_KEY` to `.env.local` and Vercel. Find it under Supabase **Project Settings → API Keys**. This is a secret: do not prefix it with `NEXT_PUBLIC_`, put it in client code, or share it. The app uses it only in the server-side, Admin-protected account creation endpoint.
+6. In **Authentication → Users**, create the first Admin account and add its matching `public.profiles` row with `role='admin'`. The Admin then creates manager sign-ins in the app under **Manager Accounts**; the app automatically assigns each new manager to the selected restaurant. The first IT and Maintenance team accounts still need to be created in Auth and assigned matching profiles with their department.
 
 For an existing manager Auth user, open `supabase/create-manager-profile.sql`, replace `manager@example.com`, `Restaurant Manager`, and `NOI-018` with the manager's email, name, and restaurant code, then run the full script in SQL Editor. It checks that both the Auth user and active restaurant exist and refuses to overwrite an existing profile.
 
@@ -88,7 +89,7 @@ insert into public.profiles(id, full_name, email, role, department)
 values ('AUTH_USER_UUID', 'IT Team Member', 'it@example.com', 'department_head', 'IT');
 ```
 
-In Supabase mode, create and assign manager accounts in Supabase Auth and `public.profiles`; the browser-only **Outlet Settings** manager form is available only in demo mode. Existing issues saved in a browser's local storage are not automatically imported into Supabase.
+If `SUPABASE_SERVICE_ROLE_KEY` is not configured, the Admin account-creation form reports that setup is missing. Existing issues saved in browser local storage are not automatically imported into Supabase.
 
 The app only needs the public anon/publishable key in `NEXT_PUBLIC_` variables. Keep any Supabase service-role key server-side and out of client code.
 

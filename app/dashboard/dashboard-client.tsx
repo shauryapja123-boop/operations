@@ -29,6 +29,12 @@ const statusClass: Record<IssueStatus,string> = {
 };
 const priorityClass: Record<DemoIssue["priority"],string> = { Critical:"critical", High:"high", Medium:"medium", Low:"low" };
 
+interface ManagerRestaurantOption {
+  id: string;
+  name: string;
+  code: string;
+}
+
 export default function DashboardClient({ role, email, outlet, userId, restaurantId }: {
   role: DemoRole;
   email: string;
@@ -56,6 +62,9 @@ export default function DashboardClient({ role, email, outlet, userId, restauran
   const [outletEdits,setOutletEdits] = useState<Record<string,string>>({});
   const [managerAccounts,setManagerAccounts] = useState<DemoManagerAccount[]>([]);
   const [newManager,setNewManager] = useState({email:"",outlet:"",password:""});
+  const [managerRestaurants,setManagerRestaurants] = useState<ManagerRestaurantOption[]>([]);
+  const [supabaseManager,setSupabaseManager] = useState({email:"",fullName:"",restaurantId:"",password:""});
+  const [creatingManager,setCreatingManager] = useState(false);
   const [passwordEdits,setPasswordEdits] = useState<Record<string,string>>({});
   const [form,setForm] = useState({title:"",department:"IT" as "IT"|"Maintenance",category:"POS / Billing",priority:"Medium" as DemoIssue["priority"],description:""});
   const notificationReader = `${role}:${email.trim().toLocaleLowerCase()}`;
@@ -231,6 +240,31 @@ export default function DashboardClient({ role, email, outlet, userId, restauran
     }
   }, [role, supabaseMode]);
 
+  useEffect(() => {
+    if (role !== "admin" || !supabaseMode) return;
+    let active = true;
+    void createClient()
+      .from("restaurants")
+      .select("id,name,code")
+      .eq("is_active", true)
+      .order("name")
+      .then(({ data, error }) => {
+        if (!active) return;
+        if (error) {
+          console.error("Could not load manager restaurant options.", error);
+          showNotice(`Could not load restaurants: ${error.message}`, true);
+          return;
+        }
+        const availableRestaurants = (data ?? []) as ManagerRestaurantOption[];
+        setManagerRestaurants(availableRestaurants);
+        setSupabaseManager(current => ({
+          ...current,
+          restaurantId: current.restaurantId || availableRestaurants[0]?.id || ""
+        }));
+      });
+    return () => { active = false; };
+  }, [role, supabaseMode]);
+
   function handleRenameOutlet(currentName:string) {
     try {
       const requestedName = outletEdits[currentName] ?? currentName;
@@ -275,6 +309,37 @@ export default function DashboardClient({ role, email, outlet, userId, restauran
       showNotice(`Password reset for ${email}.`);
     } catch (error) {
       showNotice(error instanceof Error ? error.message : "Could not reset the manager password.",true);
+    }
+  }
+
+  async function handleCreateSupabaseManager(event:React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setCreatingManager(true);
+    try {
+      const response = await fetch("/api/admin/managers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(supabaseManager)
+      });
+      const result: unknown = await response.json();
+      if (!response.ok) {
+        const message = typeof result === "object" && result !== null && "error" in result && typeof result.error === "string"
+          ? result.error
+          : "Could not create the manager account.";
+        throw new Error(message);
+      }
+      if (typeof result !== "object" || result === null ||
+          !("email" in result) || typeof result.email !== "string" ||
+          !("restaurant" in result) || typeof result.restaurant !== "string") {
+        throw new Error("The server returned an unexpected response after creating the account.");
+      }
+      setSupabaseManager(current => ({ ...current, email:"", fullName:"", password:"" }));
+      showNotice(`Manager login created for ${result.email} and assigned to ${result.restaurant}. Share the temporary password securely.`);
+    } catch (error) {
+      console.error("Could not create a Supabase manager account.", error);
+      showNotice(error instanceof Error ? error.message : "Could not create the manager account.", true);
+    } finally {
+      setCreatingManager(false);
     }
   }
 
@@ -448,7 +513,7 @@ export default function DashboardClient({ role, email, outlet, userId, restauran
       : role === "maintenance_team"
         ? [["Overview",LayoutDashboard],["Maintenance Queue",Wrench]]
           : supabaseMode
-            ? [["Overview",LayoutDashboard],["My Issues",ClipboardList],["IT Queue",Monitor],["Maintenance Queue",Wrench],["Reports & Analytics",Activity]]
+            ? [["Overview",LayoutDashboard],["My Issues",ClipboardList],["IT Queue",Monitor],["Maintenance Queue",Wrench],["Manager Accounts",Users],["Reports & Analytics",Activity]]
             : [["Overview",LayoutDashboard],["My Issues",ClipboardList],["IT Queue",Monitor],["Maintenance Queue",Wrench],["Outlet Settings",Building2],["Reports & Analytics",Activity]];
   const roleTitle = role === "restaurant_manager" ? "Outlet Manager" : role === "it_team" ? "IT Team" : role === "maintenance_team" ? "Maintenance Team" : "Administrator";
   const roleInitials = role === "restaurant_manager" ? "RM" : role === "it_team" ? "IT" : role === "maintenance_team" ? "MT" : "AD";
@@ -501,7 +566,23 @@ export default function DashboardClient({ role, email, outlet, userId, restauran
           </div>
         </>}
 
-        {role === "admin" && !supabaseMode && active === "Outlet Settings" ? (
+        {role === "admin" && supabaseMode && active === "Manager Accounts" ? (
+          <div className="panel settings-panel">
+            <section>
+              <div className="panel-head"><div><h3>Create a manager login</h3><p>Create the sign-in and assign the manager to an active restaurant. You can give them the temporary password separately.</p></div></div>
+              {managerRestaurants.length === 0 ? <p className="settings-empty">No active restaurants found. Add or activate a restaurant before creating manager accounts.</p> : (
+                <form className="manager-provision-form" onSubmit={handleCreateSupabaseManager}>
+                  <label>Manager name<input autoComplete="name" maxLength={120} required value={supabaseManager.fullName} onChange={event=>setSupabaseManager(current=>({...current,fullName:event.target.value}))}/></label>
+                  <label>Email address<input autoComplete="off" maxLength={254} required type="email" value={supabaseManager.email} onChange={event=>setSupabaseManager(current=>({...current,email:event.target.value}))}/></label>
+                  <label>Restaurant<select required value={supabaseManager.restaurantId} onChange={event=>setSupabaseManager(current=>({...current,restaurantId:event.target.value}))}>{managerRestaurants.map(restaurant=><option key={restaurant.id} value={restaurant.id}>{restaurant.name} ({restaurant.code})</option>)}</select></label>
+                  <label>Temporary password<input autoComplete="new-password" minLength={8} maxLength={128} required type="password" value={supabaseManager.password} onChange={event=>setSupabaseManager(current=>({...current,password:event.target.value}))}/></label>
+                  <button className="primary-btn" type="submit" disabled={creatingManager}>{creatingManager ? "Creating login..." : "Create manager login"}</button>
+                </form>
+              )}
+              <p className="settings-empty">The manager can sign in with this email and password. Ask them to change their password after first sign-in if you enable password recovery for your project.</p>
+            </section>
+          </div>
+        ) : role === "admin" && !supabaseMode && active === "Outlet Settings" ? (
           <div className="panel settings-panel">
             <section>
               <div className="panel-head"><div><h3>Outlet names</h3><p>Names must be unique. Existing issues and manager assignments are updated when an outlet is renamed.</p></div></div>

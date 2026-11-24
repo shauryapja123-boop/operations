@@ -2,8 +2,8 @@
 -- Edit all three values below, then run this script in the Supabase SQL Editor.
 do $$
 declare
-  manager_email text := 'manager@example.com';
-  manager_name text := 'Restaurant Manager';
+  manager_email text := 'janakpuri@btwgmail.com';
+  manager_name text := 'Amit Sharma';
   outlet_code text := 'NOI-018';
   auth_user_id uuid;
   outlet_id uuid;
