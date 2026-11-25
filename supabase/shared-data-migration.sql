@@ -122,7 +122,7 @@ begin
       p.role = 'admin'
       or (
         p.role in ('department_executive','department_head')
-        and p.department = new.department
+        and p.department in ('IT', 'Maintenance')
       )
     );
 

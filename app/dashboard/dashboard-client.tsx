@@ -29,6 +29,34 @@ const statusClass: Record<IssueStatus,string> = {
 };
 const priorityClass: Record<DemoIssue["priority"],string> = { Critical:"critical", High:"high", Medium:"medium", Low:"low" };
 
+async function sendWhatsAppIssueAlert(issue: DemoIssue, supabaseMode: boolean): Promise<number> {
+  const body = supabaseMode
+    ? { ticketId: issue.databaseId }
+    : {
+        department: issue.department,
+        ticketId: issue.id,
+        title: issue.title,
+        location: issue.location,
+        priority: issue.priority
+      };
+  const response = await fetch("/api/notifications/whatsapp", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  const result: unknown = await response.json();
+  if (!response.ok) {
+    const errorMessage = typeof result === "object" && result !== null && "error" in result && typeof result.error === "string"
+      ? result.error
+      : "WhatsApp notification failed.";
+    throw new Error(errorMessage);
+  }
+  if (typeof result !== "object" || result === null || !("accepted" in result) || typeof result.accepted !== "number") {
+    throw new Error("WhatsApp returned an unexpected response.");
+  }
+  return result.accepted;
+}
+
 interface ManagerRestaurantOption {
   id: string;
   name: string;
@@ -350,21 +378,34 @@ export default function DashboardClient({ role, email, outlet, userId, restauran
         showNotice("Your account is missing its restaurant assignment. Contact an administrator.", true);
         return;
       }
+      let item: DemoIssue;
       try {
-        const item = await createSupabaseIssue({
+        item = await createSupabaseIssue({
           userId,
           restaurantId,
           issue: form,
           location: outlet
         });
-        setIssues(current => [item, ...current]);
-        setShowNew(false);
-        setActive("My Issues");
-        setForm(current => ({ ...current, title: "", description: "" }));
-        showNotice(`Issue submitted — ${item.id}. The assigned team and Admin have been notified.`);
       } catch (error) {
         console.error("Could not submit issue to Supabase.", error);
         showNotice(error instanceof Error ? error.message : "Could not submit the issue.", true);
+        setTimeout(()=>setNotice(""),5000);
+        return;
+      }
+      setIssues(current => [item, ...current]);
+      setShowNew(false);
+      setActive("My Issues");
+      setForm(current => ({ ...current, title: "", description: "" }));
+      try {
+        const accepted = await sendWhatsAppIssueAlert(item, true);
+        showNotice(`Issue submitted — ${item.id}. IT, Maintenance, and Admin were notified in-app; WhatsApp accepted ${accepted} alert(s).`);
+      } catch (error) {
+        if (error instanceof Error && error.message === "WhatsApp alerts are not enabled.") {
+          showNotice(`Issue submitted — ${item.id}. IT, Maintenance, and Admin were notified in-app.`);
+        } else {
+          console.error("Issue was created, but the WhatsApp alerts failed.", error);
+          showNotice(`Issue submitted — ${item.id}. In-app alerts were sent to IT, Maintenance, and Admin, but WhatsApp failed: ${error instanceof Error ? error.message : "Unknown error."}`, true);
+        }
       }
       setTimeout(()=>setNotice(""),5000);
       return;
@@ -375,41 +416,16 @@ export default function DashboardClient({ role, email, outlet, userId, restauran
     setIssues([item,...issues]); setShowNew(false); setActive("My Issues");
     setNotifications(current => [createDemoNotification(item), ...current]);
     setForm({...form,title:"",description:""});
-    if (item.department === "Maintenance") {
-      try {
-        const response = await fetch("/api/notifications/whatsapp", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            department: item.department,
-            ticketId: item.id,
-            title: item.title,
-            location: item.location,
-            priority: item.priority
-          })
-        });
-        const result: unknown = await response.json();
-        if (!response.ok) {
-          const errorMessage = typeof result === "object" && result !== null && "error" in result && typeof result.error === "string"
-            ? result.error
-            : "WhatsApp notification failed.";
-          throw new Error(errorMessage);
-        }
-        showNotice(`Issue submitted — ${item.id}. In-app alerts sent to Maintenance and Admin; WhatsApp accepted the alert.`);
-        if (typeof result === "object" && result !== null && "accepted" in result && typeof result.accepted === "number") {
-          showNotice(`Issue submitted — ${item.id}. In-app alerts sent to Maintenance and Admin; WhatsApp accepted ${result.accepted} alert(s).`);
-        }
-      } catch (error) {
-        if (error instanceof Error && error.message === "WhatsApp alerts are not enabled.") {
-          showNotice(`Issue submitted — ${item.id}. In-app alerts sent to Maintenance and Admin.`);
-          setTimeout(()=>setNotice(""),5000);
-          return;
-        }
-        console.error("Issue was created, but the WhatsApp maintenance alert failed.", error);
-        showNotice(`Issue submitted — ${item.id}. In-app alerts sent to Maintenance and Admin, but WhatsApp failed: ${error instanceof Error ? error.message : "Unknown error."}`,true);
+    try {
+      const accepted = await sendWhatsAppIssueAlert(item, false);
+      showNotice(`Issue submitted — ${item.id}. In-app alerts sent to IT, Maintenance, and Admin; WhatsApp accepted ${accepted} alert(s).`);
+    } catch (error) {
+      if (error instanceof Error && error.message === "WhatsApp alerts are not enabled.") {
+        showNotice(`Issue submitted — ${item.id}. In-app alerts sent to IT, Maintenance, and Admin.`);
+      } else {
+        console.error("Issue was created, but the WhatsApp alerts failed.", error);
+        showNotice(`Issue submitted — ${item.id}. In-app alerts were sent to IT, Maintenance, and Admin, but WhatsApp failed: ${error instanceof Error ? error.message : "Unknown error."}`,true);
       }
-    } else {
-      showNotice(`Issue submitted — ${item.id}. In-app alerts sent to IT and Admin.`);
     }
     setTimeout(()=>setNotice(""),5000);
   }
@@ -640,7 +656,7 @@ export default function DashboardClient({ role, email, outlet, userId, restauran
     </section>
 
     {showNew&&<div className="overlay" onMouseDown={e=>{if(e.target===e.currentTarget)setShowNew(false)}}><form className="modal" onSubmit={createIssue}><div className="modal-head"><div><div className="eyebrow">NEW SUPPORT REQUEST</div><h2>Raise an issue</h2><p>Share the details so the right team can help.</p></div><button type="button" className="icon-btn" onClick={()=>setShowNew(false)}><X/></button></div>
-      <label>Issue title<input required placeholder="e.g. POS terminal not working" value={form.title} onChange={e=>setForm({...form,title:e.target.value})}/></label>
+      <label>Issue title<input required maxLength={120} placeholder="e.g. POS terminal not working" value={form.title} onChange={e=>setForm({...form,title:e.target.value})}/></label>
       <div className="form-row"><label>Your outlet<input readOnly value={outlet}/></label><label>Department<select value={form.department} onChange={e=>setForm({...form,department:e.target.value as "IT"|"Maintenance",category:e.target.value==="IT"?"POS / Billing":"Air Conditioning"})}><option>IT</option><option>Maintenance</option></select></label></div>
       <div className="form-row"><label>Category<select value={form.category} onChange={e=>setForm({...form,category:e.target.value})}>{(form.department==="IT"?["POS / Billing","Network / Internet","Printer","CCTV / Network","Software","Hardware","Other"]:["Air Conditioning","Electrical","Plumbing","Kitchen Equipment","Civil / Carpentry","Other"]).map(c=><option key={c}>{c}</option>)}</select></label><label>Priority<select value={form.priority} onChange={e=>setForm({...form,priority:e.target.value as DemoIssue["priority"]})}><option>Low</option><option>Medium</option><option>High</option><option>Critical</option></select></label></div>
       <label>Description<textarea required rows={4} placeholder="Describe what happened, where it happened and how operations are affected..." value={form.description} onChange={e=>setForm({...form,description:e.target.value})}/></label>

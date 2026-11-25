@@ -10,7 +10,7 @@ The interface uses the BTW Operations name and supplied BTW logo with a warm cre
 - Issue register with search, status and department filters.
 - New issue submission flow and ticket detail/status interaction (local demo state).
 - IT and Maintenance queue views.
-- In-app alerts for the selected department team and Admin when a manager raises an issue.
+- In-app alerts for both the IT and Maintenance teams, plus Admin, when a manager raises an issue.
 - Shared tickets and real-time notifications through Supabase when Supabase Auth is configured.
 - Admin tools for renaming outlets and managing demo manager accounts.
 - Resolution controls for IT and Maintenance teams, with resolved state visible to managers and admins.
@@ -49,22 +49,26 @@ In demo mode, Admin can open **Outlet Settings** to edit outlet names and manage
 
 ## Demo in-app notifications
 
-When Supabase is configured, a database trigger creates an unread notification for active Admin and matching department accounts whenever a manager submits a ticket. Notifications and ticket changes are delivered to signed-in dashboards through Supabase Realtime. In demo mode, alerts remain in browser local storage and only sync across tabs in that browser.
+When Supabase is configured, a database trigger creates an unread notification for active Admin, IT, and Maintenance accounts whenever a manager submits a ticket. This alerts both teams, while the ticket remains in the selected department's queue. Notifications and ticket changes are delivered to signed-in dashboards through Supabase Realtime. In demo mode, alerts remain in browser local storage and only sync across tabs in that browser.
 
-## Demo WhatsApp alerts for Maintenance
+## WhatsApp alerts for IT and Maintenance
 
-The demo can send a WhatsApp template message to configured maintenance team members when a manager raises a Maintenance issue. IT issues do not trigger WhatsApp messages.
+When a manager raises any issue, the app sends a WhatsApp template alert to the configured IT and Maintenance recipients. This is separate from the in-app notifications and does not change which department owns the ticket.
 
 1. In Meta's WhatsApp Business Platform, configure the sender and use an approved template with exactly four body placeholders, in this order: ticket ID, issue title, outlet, priority.
-2. Copy `.env.example` to `.env.local` and set the WhatsApp variables. Put recipient phone numbers in international format as digits only (country code included), separated by commas.
-3. Set `WHATSAPP_DEMO_ALERTS_ENABLED=true`, then restart the Next.js server.
+2. Set `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_GRAPH_API_VERSION`, `WHATSAPP_TEMPLATE_NAME`, and `WHATSAPP_TEMPLATE_LANGUAGE` on the server. Set `WHATSAPP_IT_RECIPIENTS` and `WHATSAPP_MAINTENANCE_RECIPIENTS` to comma-separated phone numbers in international format as digits only (country code included).
+3. For Supabase deployments, set `WHATSAPP_ALERTS_ENABLED=true` and configure these variables in the server environment. The endpoint verifies the signed-in manager and loads the newly created ticket from Supabase before sending.
+4. For local browser-only demo mode, set `WHATSAPP_DEMO_ALERTS_ENABLED=true` instead, then restart the Next.js server. Demo tickets are not authenticated or stored on a server, so this mode is only for local testing and must not be enabled on a public or production deployment.
 
-The access token and recipient list are read only by the server; never use `NEXT_PUBLIC_` for these settings. The demo login and tickets are not authenticated or stored on a server, so this endpoint is intentionally demo-only and can be called without a verified manager account. Do not enable it on a public or production deployment. For production, first connect real Supabase Auth and server-side ticket creation, then trigger WhatsApp only from that authenticated ticket workflow.
+The access token and recipient lists are server-only settings; never use `NEXT_PUBLIC_` for them. If WhatsApp is unavailable, the issue remains submitted and the dashboard reports the alert failure.
 
 ## Set up shared Supabase data
 
 1. Create a Supabase project and open its **SQL Editor**.
-2. Run `supabase/schema.sql`, then run `supabase/shared-data-migration.sql`.
+2. Run `supabase/schema.sql`, then run `supabase/shared-data-migration.sql` and `supabase/notify-both-departments-migration.sql` in that order.
+
+If your Supabase project is already set up, run only `supabase/notify-both-departments-migration.sql` once in the SQL Editor to enable alerts for both teams.
+
 3. In **Project Settings → API**, copy the project URL and public anon/publishable key. Do not use the service-role key in the browser.
 4. Add `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` to `.env.local` for local development and to Vercel's environment variables for every deployment environment.
 5. To let the Admin create manager accounts from **Manager Accounts**, also add `SUPABASE_SERVICE_ROLE_KEY` to `.env.local` and Vercel. Find it under Supabase **Project Settings → API Keys**. This is a secret: do not prefix it with `NEXT_PUBLIC_`, put it in client code, or share it. The app uses it only in the server-side, Admin-protected account creation endpoint.

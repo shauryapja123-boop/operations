@@ -47,7 +47,7 @@ export function createDemoNotification(issue: DemoIssue): DemoNotification {
     department: issue.department,
     priority: issue.priority,
     createdAt: new Date().toISOString(),
-    recipients: [issue.department === "IT" ? "it_team" : "maintenance_team", "admin"],
+    recipients: ["it_team", "maintenance_team", "admin"],
     readBy: []
   };
 }
